@@ -40,6 +40,20 @@ class MarketReport(Base):
     data_json = Column(Text, nullable=False)
 
 
+class PriceEntry(Base):
+    __tablename__ = "price_entries"
+    id = Column(Integer, primary_key=True, index=True)
+    commodity = Column(String(64), index=True, nullable=False)
+    origin = Column(String(128), nullable=False)
+    destination = Column(String(128), nullable=False)
+    price = Column(Float, nullable=False)
+    trade_type = Column(String(16), nullable=False)   # buy | sell | indicative
+    cargo_type = Column(String(16), nullable=False)   # bulk | container
+    date = Column(String(10), nullable=False)          # YYYY-MM-DD
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 def create_tables():
     Base.metadata.create_all(bind=engine)
 

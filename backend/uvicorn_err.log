@@ -1,0 +1,12 @@
+INFO:     Started server process [8212]
+INFO:     Waiting for application startup.
+2026-05-01 20:26:07,716 INFO apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-01 20:26:07,718 INFO apscheduler.scheduler: Added job "run_refresh_standalone" to job store "default"
+2026-05-01 20:26:07,719 INFO apscheduler.scheduler: Scheduler started
+2026-05-01 20:26:07,721 INFO main: Starting news refresh …
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-05-01 20:26:07,945 WARNING news_fetcher: RSS fetch failed [Western Producer]: 403 Client Error: Forbidden for url: https://www.producer.com/feed/
+2026-05-01 20:26:10,840 WARNING news_fetcher: RSS fetch failed [AgWeb]: 403 Client Error: Forbidden for url: https://www.agweb.com/rss/news
+2026-05-01 20:26:12,028 WARNING news_fetcher: RSS fetch failed [Successful Farming]: 404 Client Error: Not Found for url: https://www.agriculture.com/rss/news/crops
+2026-05-01 20:26:13,674 WARNING news_fetcher: RSS fetch failed [Farm Progress]: 404 Client Error: Not Found for url: https://www.farmprogress.com/rss/news-crops

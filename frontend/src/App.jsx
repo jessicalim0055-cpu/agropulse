@@ -6,6 +6,7 @@ import NewsFeed from './components/NewsFeed'
 import ReportAnalyzer from './components/ReportAnalyzer'
 import ConflictTracker from './components/ConflictTracker'
 import VesselTracker from './components/VesselTracker'
+import PriceTracker from './components/PriceTracker'
 
 const POLL_MS = 5 * 60 * 1000 // auto-reload every 5 min
 
@@ -20,6 +21,17 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError]         = useState(null)
   const [activeTab, setActiveTab] = useState('dashboard')
+  const [isDark, setIsDark] = useState(() => {
+    const saved = localStorage.getItem('agropulse_theme')
+    return !saved || saved === 'dark'
+  })
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', isDark)
+    localStorage.setItem('agropulse_theme', isDark ? 'dark' : 'light')
+  }, [isDark])
+
+  const toggleTheme = () => setIsDark(d => !d)
 
   const api = (path) => fetch(path).then((r) => { if (!r.ok) throw new Error(r.statusText); return r.json() })
 
@@ -77,11 +89,11 @@ export default function App() {
     return (
       <div className="min-h-screen flex items-center justify-center text-center px-4">
         <div>
-          <p className="text-red-400 text-xl font-semibold mb-2">Connection Error</p>
-          <p className="text-slate-400">{error}</p>
+          <p className="text-red-600 dark:text-red-400 text-xl font-semibold mb-2">Connection Error</p>
+          <p className="text-slate-600 dark:text-slate-400">{error}</p>
           <button
             onClick={loadAll}
-            className="mt-4 px-4 py-2 bg-emerald-700 hover:bg-emerald-600 rounded-lg text-sm text-white"
+            className="mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 rounded-lg text-sm text-white"
           >
             Retry
           </button>
@@ -92,13 +104,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen">
-      <Header status={status} onRefresh={handleRefresh} refreshing={refreshing || status?.is_refreshing} activeTab={activeTab} onTabChange={setActiveTab} />
+      <Header status={status} onRefresh={handleRefresh} refreshing={refreshing || status?.is_refreshing} activeTab={activeTab} onTabChange={setActiveTab} isDark={isDark} onThemeToggle={toggleTheme} />
       <main className="max-w-screen-2xl mx-auto px-4 sm:px-6 py-6 space-y-10">
         {loading ? (
           <div className="flex items-center justify-center h-64">
             <div className="flex flex-col items-center gap-3">
               <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-              <p className="text-slate-400 text-sm">Fetching market intelligence…</p>
+              <p className="text-slate-600 dark:text-slate-400 text-sm">Fetching market intelligence…</p>
             </div>
           </div>
         ) : activeTab === 'vessels' ? (
@@ -107,6 +119,8 @@ export default function App() {
           <ConflictTracker />
         ) : activeTab === 'reports' ? (
           <ReportAnalyzer />
+        ) : activeTab === 'prices' ? (
+          <PriceTracker isDark={isDark} />
         ) : (
           <>
             <SentimentDashboard
@@ -118,6 +132,7 @@ export default function App() {
               trends={trends}
               period={period}
               onPeriodChange={setPeriod}
+              isDark={isDark}
             />
             <NewsFeed
               news={news}

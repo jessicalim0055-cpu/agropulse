@@ -15,7 +15,7 @@ import threading
 
 load_dotenv()
 
-from database import Article, ArticleSentiment, MarketReport, create_tables, get_db, SessionLocal
+from database import Article, ArticleSentiment, MarketReport, PriceEntry, create_tables, get_db, SessionLocal
 from news_fetcher import fetch_all_feeds
 from analyzer import analyze_article, analyze_report, COMMODITIES
 import vessel_tracker
@@ -377,9 +377,100 @@ def delete_report(
     return {"ok": True}
 
 
-# ── Vessel tracking ───────────────────────────────────────────────────────────
+# ── Price tracking ────────────────────────────────────────────────────────────
 
 from pydantic import BaseModel
+
+
+class PriceEntryCreate(BaseModel):
+    commodity: str
+    origin: str
+    destination: str
+    price: float
+    trade_type: str   # buy | sell | indicative
+    cargo_type: str   # bulk | container
+    date: str         # YYYY-MM-DD
+    notes: Optional[str] = None
+
+
+def _price_row(r: PriceEntry) -> dict:
+    return {
+        "id": r.id,
+        "commodity": r.commodity,
+        "origin": r.origin,
+        "destination": r.destination,
+        "price": r.price,
+        "trade_type": r.trade_type,
+        "cargo_type": r.cargo_type,
+        "date": r.date,
+        "notes": r.notes,
+    }
+
+
+@app.get("/api/prices")
+def get_prices(
+    commodity: Optional[str] = None,
+    trade_type: Optional[str] = None,
+    cargo_type: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(PriceEntry).order_by(PriceEntry.date.desc(), PriceEntry.created_at.desc())
+    if commodity:
+        q = q.filter(PriceEntry.commodity == commodity)
+    if trade_type:
+        q = q.filter(PriceEntry.trade_type == trade_type)
+    if cargo_type:
+        q = q.filter(PriceEntry.cargo_type == cargo_type)
+    return [_price_row(r) for r in q.all()]
+
+
+@app.post("/api/prices")
+def create_price(
+    body: PriceEntryCreate,
+    x_admin_password: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    _check_admin(x_admin_password)
+    if body.commodity not in COMMODITIES:
+        raise HTTPException(status_code=422, detail="Unknown commodity key.")
+    if body.trade_type not in ("buy", "sell", "indicative"):
+        raise HTTPException(status_code=422, detail="trade_type must be buy, sell, or indicative.")
+    if body.cargo_type not in ("bulk", "container"):
+        raise HTTPException(status_code=422, detail="cargo_type must be bulk or container.")
+    entry = PriceEntry(
+        commodity=body.commodity,
+        origin=body.origin.strip(),
+        destination=body.destination.strip(),
+        price=body.price,
+        trade_type=body.trade_type,
+        cargo_type=body.cargo_type,
+        date=body.date,
+        notes=body.notes,
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return _price_row(entry)
+
+
+@app.delete("/api/prices/{entry_id}")
+def delete_price(
+    entry_id: int,
+    x_admin_password: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    _check_admin(x_admin_password)
+    row = db.query(PriceEntry).filter(PriceEntry.id == entry_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Price entry not found.")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+# ── Vessel tracking ───────────────────────────────────────────────────────────
+
+
 
 class VesselTrackRequest(BaseModel):
     imo: list[str]
