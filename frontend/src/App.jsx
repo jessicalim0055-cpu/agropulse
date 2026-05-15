@@ -6,7 +6,7 @@ import NewsFeed from './components/NewsFeed'
 import ReportAnalyzer from './components/ReportAnalyzer'
 import ConflictTracker from './components/ConflictTracker'
 import VesselTracker from './components/VesselTracker'
-import PriceTracker from './components/PriceTracker'
+import EmailReports from './components/EmailReports'
 
 const POLL_MS = 5 * 60 * 1000 // auto-reload every 5 min
 
@@ -119,25 +119,31 @@ export default function App() {
           <ConflictTracker />
         ) : activeTab === 'reports' ? (
           <ReportAnalyzer />
-        ) : activeTab === 'prices' ? (
-          <PriceTracker isDark={isDark} />
+        ) : activeTab === 'emails' ? (
+          <EmailReports />
         ) : (
           <>
-            <SentimentDashboard
-              sentiment={sentiment}
-              selectedCommodity={commodity}
-              onSelectCommodity={setCommodity}
-            />
+            <div className="flex gap-5 items-start">
+              <div className="w-[400px] flex-shrink-0">
+                <SentimentDashboard
+                  sentiment={sentiment}
+                  selectedCommodity={commodity}
+                  onSelectCommodity={setCommodity}
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <NewsFeed
+                  news={news}
+                  selectedCommodity={commodity}
+                  onSelectCommodity={setCommodity}
+                />
+              </div>
+            </div>
             <TrendSection
               trends={trends}
               period={period}
               onPeriodChange={setPeriod}
               isDark={isDark}
-            />
-            <NewsFeed
-              news={news}
-              selectedCommodity={commodity}
-              onSelectCommodity={setCommodity}
             />
           </>
         )}

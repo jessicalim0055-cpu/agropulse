@@ -40,6 +40,23 @@ class MarketReport(Base):
     data_json = Column(Text, nullable=False)
 
 
+class ProcessedEmailId(Base):
+    __tablename__ = "processed_email_ids"
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(String(512), unique=True, index=True, nullable=False)
+    processed_at = Column(DateTime, server_default=func.now())
+
+
+class PulseEmailReport(Base):
+    __tablename__ = "pulse_email_reports"
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String(512))
+    sender = Column(String(256), nullable=True)
+    email_date = Column(String(64), nullable=True)
+    uploaded_at = Column(DateTime, server_default=func.now())
+    data_json = Column(Text, nullable=False)
+
+
 class PriceEntry(Base):
     __tablename__ = "price_entries"
     id = Column(Integer, primary_key=True, index=True)

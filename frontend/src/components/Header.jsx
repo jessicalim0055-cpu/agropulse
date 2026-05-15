@@ -1,4 +1,4 @@
-import { RefreshCw, Sprout, LayoutDashboard, FileSearch, Globe, Ship, Sun, Moon, BarChart2 } from 'lucide-react'
+import { RefreshCw, Sprout, LayoutDashboard, FileSearch, Globe, Ship, Sun, Moon, Mail } from 'lucide-react'
 
 function fmt(iso) {
   if (!iso) return 'Never'
@@ -8,7 +8,7 @@ function fmt(iso) {
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard',        Icon: LayoutDashboard },
-  { id: 'prices',    label: 'Price Tracker',    Icon: BarChart2 },
+  { id: 'emails',    label: 'Parity Emails',    Icon: Mail },
   { id: 'reports',   label: 'Report Analyser',  Icon: FileSearch },
   { id: 'conflicts', label: 'Conflict Tracker', Icon: Globe },
   { id: 'vessels',   label: 'Vessel Tracker',   Icon: Ship },

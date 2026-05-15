@@ -32,7 +32,7 @@ const DEFAULT_FLEET = [
 ]
 
 const BLANK = {
-  type: 'bulk', name: '', imo: '', operator: 'PEIRU',
+  type: 'bulk', name: '', imo: '', mmsi: '', operator: 'PEIRU',
   origin: '', destination: '', etd: '', eta: '', status: 'Laden',
   lat: '', lng: '', flag: '', vessel_type: '',
 }
@@ -106,10 +106,13 @@ export default function VesselTracker() {
     if (!imos.length) return
     setFetching(true)
     try {
+      const mmsi_map = Object.fromEntries(
+        fleet.filter(v => v.imo && v.mmsi).map(v => [v.imo, v.mmsi])
+      )
       const res = await fetch('/api/vessel-positions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imo: imos }),
+        body: JSON.stringify({ imo: imos, mmsi_map }),
       })
       if (res.ok) {
         const data = await res.json()
@@ -190,7 +193,15 @@ export default function VesselTracker() {
       const res = await fetch(`/api/vessels/lookup?imo=${imo}`)
       if (res.ok) {
         const data = await res.json()
-        if (data.ship_name) setForm(f => ({ ...f, name: data.ship_name || f.name, flag: data.flag || f.flag, vessel_type: data.vessel_type || f.vessel_type }))
+        if (data.ship_name || data.mmsi) {
+          setForm(f => ({
+            ...f,
+            name:        data.ship_name || f.name,
+            mmsi:        data.mmsi      || f.mmsi,
+            flag:        data.flag      || f.flag,
+            vessel_type: data.vessel_type || f.vessel_type,
+          }))
+        }
       }
     } catch { /* ignore */ }
     finally { setLooking(false) }
@@ -231,7 +242,7 @@ export default function VesselTracker() {
             <Ship size={16} className="text-emerald-600 dark:text-emerald-400" /> Vessel Tracker
           </h2>
           <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
-            Fleet positions · live data via VesselFinder · refreshes every 15 min
+            Fleet positions · live AIS via aisstream.io · updates in real time
             {liveCount > 0 ? (
               <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                 <Wifi size={11} /> {liveCount} live
@@ -251,9 +262,9 @@ export default function VesselTracker() {
             <Wifi size={11} className={fetching ? 'animate-pulse' : ''} />
             {fetching ? 'Fetching…' : 'Refresh'}
           </button>
-          <a href="https://www.vesselfinder.com" target="_blank" rel="noopener noreferrer"
+          <a href="https://www.marinetraffic.com" target="_blank" rel="noopener noreferrer"
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:border-slate-400 dark:hover:border-slate-500 transition-all"
-          ><ExternalLink size={11} /> VesselFinder</a>
+          ><ExternalLink size={11} /> MarineTraffic</a>
           {isAdmin ? (
             <button onClick={logout}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-emerald-600 dark:border-emerald-700/50 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-all"
@@ -361,8 +372,9 @@ export default function VesselTracker() {
                     )}
                   </div>
                   <p className="text-[10px] text-slate-500">
-                    {selected.imo ? `IMO ${selected.imo}` : 'No IMO'} ·{' '}
-                    {selected.flag || selected.vessel_type || selected.type}
+                    {selected.imo ? `IMO ${selected.imo}` : 'No IMO'}
+                    {selected.mmsi ? ` · MMSI ${selected.mmsi}` : ''}
+                    {(selected.flag || selected.vessel_type) ? ` · ${selected.flag || selected.vessel_type}` : ''}
                     {selected.operator && <span className="font-bold" style={{ color: OP_COLORS[selected.operator] }}> · {selected.operator}</span>}
                   </p>
                 </div>
@@ -377,6 +389,7 @@ export default function VesselTracker() {
                   { label: 'Speed / Course', content: selLive?.speed != null ? <div className="flex items-center gap-1.5"><Navigation size={11} className="text-emerald-600 dark:text-emerald-400" style={{ transform: `rotate(${(selLive.course || 0) - 45}deg)` }} /><span className="text-xs text-slate-700 dark:text-slate-300">{selLive.speed} kn · {Math.round(selLive.course ?? 0)}°</span></div> : <p className="text-xs text-slate-400 dark:text-slate-600">—</p> },
                   { label: 'Nav Status', content: <p className="text-xs text-slate-700 dark:text-slate-300">{selLive?.nav_status ?? '—'}</p> },
                   { label: 'AIS Destination', content: <p className="text-xs text-slate-700 dark:text-slate-300 truncate">{selLive?.destination || selected.destination || '—'}</p> },
+                  { label: 'AIS ETA (self-reported)', content: <p className="text-xs text-slate-700 dark:text-slate-300">{selLive?.ais_eta || '—'}</p> },
                 ].map(({ label, content }) => (
                   <div key={label} className="bg-slate-50 dark:bg-slate-900/60 rounded-lg p-2.5 border border-slate-200 dark:border-slate-800">
                     <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600 mb-1">{label}</p>
@@ -393,11 +406,11 @@ export default function VesselTracker() {
                 {selected.etd && <div><span className="text-slate-400 dark:text-slate-600 text-[10px] uppercase tracking-wider mr-1">ETD</span><span className="text-slate-700 dark:text-slate-300">{fmtDate(selected.etd)}</span><span className="ml-1"><EtaBadge date={selected.etd} label="dep" /></span></div>}
                 {selected.eta && <div><span className="text-slate-400 dark:text-slate-600 text-[10px] uppercase tracking-wider mr-1">ETA</span><span className="text-slate-700 dark:text-slate-300">{fmtDate(selected.eta)}</span><span className="ml-1"><EtaBadge date={selected.eta} label="arr" /></span></div>}
                 {selected.imo && (
-                  <a href={`https://www.vesselfinder.com/vessels/details/${selected.imo}`}
+                  <a href={`https://www.marinetraffic.com/en/ais/details/ships/imo:${selected.imo}`}
                     target="_blank" rel="noopener noreferrer"
                     className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors ml-auto"
                     onClick={e => e.stopPropagation()}
-                  ><ExternalLink size={11} /> Track on VesselFinder</a>
+                  ><ExternalLink size={11} /> View on MarineTraffic</a>
                 )}
               </div>
             </div>
@@ -511,7 +524,20 @@ export default function VesselTracker() {
                     {looking ? 'Looking up…' : 'Auto-fill'}
                   </button>
                 </div>
-                <p className="text-[10px] text-slate-500 mt-1">Find the IMO on <a href="https://www.vesselfinder.com" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">VesselFinder</a> by searching the vessel name.</p>
+                <p className="text-[10px] text-slate-500 mt-1">Auto-fill resolves both name and MMSI from the IMO. Or find on <a href="https://www.vesselfinder.com" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">VesselFinder</a>.</p>
+              </div>
+
+              <div>
+                <p className="text-[10px] text-slate-600 dark:text-slate-400 font-semibold uppercase tracking-wider mb-1.5">
+                  MMSI <span className="text-emerald-600 normal-case font-normal">(9 digits — required for live aisstream.io tracking)</span>
+                </p>
+                <input
+                  value={form.mmsi || ''}
+                  onChange={e => setField('mmsi', e.target.value.replace(/\D/g, ''))}
+                  placeholder="e.g. 477123456"
+                  maxLength={9}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-600 outline-none focus:border-emerald-600 transition-colors font-mono"
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-3">

@@ -15,10 +15,11 @@ import threading
 
 load_dotenv()
 
-from database import Article, ArticleSentiment, MarketReport, PriceEntry, create_tables, get_db, SessionLocal
+from database import Article, ArticleSentiment, MarketReport, PulseEmailReport, ProcessedEmailId, PriceEntry, create_tables, get_db, SessionLocal
 from news_fetcher import fetch_all_feeds
-from analyzer import analyze_article, analyze_report, COMMODITIES
+from analyzer import analyze_article, analyze_report, analyze_parity_email, COMMODITIES
 import vessel_tracker
+import outlook_fetcher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -111,6 +112,7 @@ async def lifespan(app: FastAPI):
     from apscheduler.schedulers.background import BackgroundScheduler
     scheduler = BackgroundScheduler()
     scheduler.add_job(run_refresh_standalone, trigger="interval", hours=6, id="auto_refresh")
+    scheduler.add_job(sync_parity_emails_job, trigger="interval", weeks=1, id="parity_email_sync")
     scheduler.start()
 
     # Initial refresh on startup (non-blocking)
@@ -136,6 +138,72 @@ app.add_middleware(
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+_news_cache: dict = {}   # {query: (timestamp, articles)}
+_NEWS_CACHE_TTL = 3600   # 1 hour
+
+@app.get("/api/conflict-news")
+def get_conflict_news(q: str, db: Session = Depends(get_db)):
+    import time as _time
+
+    cache_key = q.lower().strip()
+    if cache_key in _news_cache:
+        ts, cached = _news_cache[cache_key]
+        if _time.time() - ts < _NEWS_CACHE_TTL:
+            return {"articles": cached}
+
+    articles: list[dict] = []
+
+    # ── 1. Search local DB (title-only for relevance) ─────────────────────────
+    terms = [t.strip() for t in q.split() if len(t.strip()) > 2]
+    if terms:
+        from sqlalchemy import or_
+        title_conditions = [Article.title.ilike(f"%{t}%") for t in terms]
+        rows = (
+            db.query(Article)
+            .filter(or_(*title_conditions))
+            .order_by(Article.published_at.desc())
+            .limit(6)
+            .all()
+        )
+        for a in rows:
+            snippet = (a.content or "").strip()[:280].rsplit(" ", 1)[0] + "…" if a.content else ""
+            articles.append({
+                "title": a.title,
+                "description": snippet,
+                "url": a.url,
+                "image": "",
+                "source": a.source or "",
+                "published_at": a.published_at.isoformat() if a.published_at else "",
+            })
+
+    # ── 2. Top up with NewsAPI if key present ─────────────────────────────────
+    api_key = os.getenv("NEWS_API_KEY", "")
+    if api_key and not api_key.startswith("your-") and len(articles) < 4:
+        try:
+            resp = requests.get(
+                "https://newsapi.org/v2/everything",
+                params={"q": q, "sortBy": "publishedAt", "pageSize": 4, "language": "en", "apiKey": api_key},
+                timeout=10,
+            )
+            if resp.ok:
+                existing_urls = {a["url"] for a in articles}
+                for a in resp.json().get("articles", []):
+                    if a.get("title") and "[Removed]" not in a.get("title", "") and a["url"] not in existing_urls:
+                        articles.append({
+                            "title": a["title"],
+                            "description": a.get("description") or "",
+                            "url": a["url"],
+                            "image": a.get("urlToImage") or "",
+                            "source": a.get("source", {}).get("name", ""),
+                            "published_at": a.get("publishedAt", ""),
+                        })
+        except Exception as e:
+            logger.error(f"Conflict news NewsAPI error: {e}")
+
+    articles = articles[:6]
+    _news_cache[cache_key] = (_time.time(), articles)
+    return {"articles": articles}
 
 @app.get("/api/status")
 def get_status(db: Session = Depends(get_db)):
@@ -227,6 +295,23 @@ def get_current_sentiment(db: Session = Depends(get_db)):
         bull, bear, neut, total = (rows.bull or 0), (rows.bear or 0), (rows.neut or 0), (rows.total or 0)
         dominant = max([("bullish", bull), ("bearish", bear), ("neutral", neut)], key=lambda x: x[1])[0] if total else "neutral"
 
+        # Fetch up to 3 recent reasoning snippets for the dominant sentiment
+        reasons_rows = (
+            db.query(ArticleSentiment.reasoning)
+            .join(Article, Article.id == ArticleSentiment.article_id)
+            .filter(
+                ArticleSentiment.commodity == key,
+                ArticleSentiment.sentiment == dominant,
+                Article.published_at >= cutoff,
+                ArticleSentiment.reasoning != None,
+                ArticleSentiment.reasoning != "",
+            )
+            .order_by(Article.published_at.desc())
+            .limit(3)
+            .all()
+        )
+        top_reasons = [r.reasoning[:220] for r in reasons_rows if r.reasoning]
+
         result[key] = {
             "key": key,
             "name": name,
@@ -239,6 +324,7 @@ def get_current_sentiment(db: Session = Depends(get_db)):
             "bearish_pct": round(bear / total * 100) if total else 0,
             "neutral_pct": round(neut / total * 100) if total else 0,
             "net_score": round((bull - bear) / total, 3) if total else 0,
+            "top_reasons": top_reasons,
         }
 
     return result
@@ -377,6 +463,194 @@ def delete_report(
     return {"ok": True}
 
 
+# ── Outlook auto-sync ────────────────────────────────────────────────────────
+
+def sync_parity_emails_job():
+    """Called by APScheduler weekly and on-demand. Fetches + analyses new parity emails."""
+    db = SessionLocal()
+    try:
+        seen_ids = {r.message_id for r in db.query(ProcessedEmailId.message_id).all()}
+        emails = outlook_fetcher.fetch_parity_emails(already_seen_ids=seen_ids)
+        logger.info(f"Outlook sync: {len(emails)} new parity email(s) found")
+        for em in emails:
+            result = analyze_parity_email(
+                em["body"],
+                sender=f"{em['from_name']} <{em['from_email']}>",
+                email_date=em["received"][:10] if em["received"] else "",
+            )
+            result.setdefault("sender", f"{em['from_name']} <{em['from_email']}>")
+            result.setdefault("email_date", em["received"][:10] if em["received"] else "")
+            row = PulseEmailReport(
+                filename=em["subject"] or "Outlook email",
+                sender=result.get("sender", ""),
+                email_date=result.get("email_date", ""),
+                data_json=json.dumps({k: v for k, v in result.items() if k not in ("sender", "email_date")}),
+            )
+            db.add(row)
+            db.add(ProcessedEmailId(message_id=em["id"]))
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Outlook sync error: {e}")
+    finally:
+        db.close()
+
+
+@app.get("/api/outlook/status")
+def outlook_status():
+    status = outlook_fetcher.get_auth_status()
+    config = outlook_fetcher.get_config()
+    return {**status, **config}
+
+
+@app.post("/api/outlook/auth/start")
+def outlook_auth_start(x_admin_password: Optional[str] = Header(None)):
+    _check_admin(x_admin_password)
+    if not outlook_fetcher.get_config()["configured"]:
+        raise HTTPException(status_code=400, detail="AZURE_CLIENT_ID not set in .env — see setup instructions.")
+    try:
+        return outlook_fetcher.start_device_flow()
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/outlook/auth/status")
+def outlook_auth_status():
+    return outlook_fetcher.get_auth_status()
+
+
+@app.post("/api/outlook/disconnect")
+def outlook_disconnect(x_admin_password: Optional[str] = Header(None)):
+    _check_admin(x_admin_password)
+    outlook_fetcher.disconnect()
+    return {"ok": True}
+
+
+@app.post("/api/outlook/sync")
+def outlook_sync_now(x_admin_password: Optional[str] = Header(None)):
+    _check_admin(x_admin_password)
+    if not outlook_fetcher.is_authenticated():
+        raise HTTPException(status_code=400, detail="Outlook not authenticated.")
+    t = threading.Thread(target=sync_parity_emails_job, daemon=True)
+    t.start()
+    return {"message": "Sync started"}
+
+
+# ── Parity email reports ──────────────────────────────────────────────────────
+
+@app.get("/api/parity-emails")
+def get_parity_emails(db: Session = Depends(get_db)):
+    rows = db.query(PulseEmailReport).order_by(PulseEmailReport.uploaded_at.desc()).all()
+    return [
+        {"id": r.id, "filename": r.filename, "sender": r.sender,
+         "email_date": r.email_date, "uploaded_at": r.uploaded_at.isoformat(),
+         **json.loads(r.data_json)}
+        for r in rows
+    ]
+
+
+@app.post("/api/parity-emails/upload")
+async def upload_parity_email(
+    file: UploadFile = File(...),
+    x_admin_password: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    _check_admin(x_admin_password)
+    filename = file.filename or "email"
+    content = await file.read()
+    text = ""
+    sender = ""
+    email_date = ""
+
+    if filename.lower().endswith(".eml"):
+        import email as email_lib
+        msg = email_lib.message_from_bytes(content)
+        sender = msg.get("From", "")
+        email_date = msg.get("Date", "")
+        # Extract text body
+        if msg.is_multipart():
+            for part in msg.walk():
+                ct = part.get_content_type()
+                if ct == "text/plain":
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        text += payload.decode(part.get_content_charset() or "utf-8", errors="replace") + "\n"
+                elif ct == "text/html" and not text:
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        import re
+                        html = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+                        text += re.sub(r"<[^>]+>", " ", html) + "\n"
+        else:
+            payload = msg.get_payload(decode=True)
+            if payload:
+                text = payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
+                if msg.get_content_type() == "text/html":
+                    import re
+                    text = re.sub(r"<[^>]+>", " ", text)
+    elif filename.lower().endswith(".txt"):
+        text = content.decode("utf-8", errors="replace")
+    elif filename.lower().endswith(".pdf"):
+        try:
+            import fitz
+            doc = fitz.open(stream=content, filetype="pdf")
+            text = "\n".join(page.get_text() for page in doc)
+        except Exception:
+            try:
+                import pdfplumber
+                with pdfplumber.open(io.BytesIO(content)) as pdf:
+                    text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+            except Exception as e:
+                raise HTTPException(status_code=422, detail=f"Could not read PDF: {e}")
+    elif filename.lower().endswith(".docx"):
+        try:
+            from docx import Document
+            doc = Document(io.BytesIO(content))
+            text = "\n".join(p.text for p in doc.paragraphs)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Could not read DOCX: {e}")
+    else:
+        raise HTTPException(status_code=422, detail="Unsupported file type. Please upload .eml, .txt, .pdf, or .docx.")
+
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="No text content found in this file.")
+
+    result = analyze_parity_email(text, sender=sender, email_date=email_date)
+    result.setdefault("sender", sender)
+    result.setdefault("email_date", email_date)
+
+    row = PulseEmailReport(
+        filename=filename,
+        sender=result.get("sender") or sender,
+        email_date=result.get("email_date") or email_date,
+        data_json=json.dumps({k: v for k, v in result.items() if k not in ("sender", "email_date")}),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    return {
+        "id": row.id, "filename": row.filename, "sender": row.sender,
+        "email_date": row.email_date, "uploaded_at": row.uploaded_at.isoformat(),
+        **json.loads(row.data_json),
+    }
+
+
+@app.delete("/api/parity-emails/{report_id}")
+def delete_parity_email(
+    report_id: int,
+    x_admin_password: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    _check_admin(x_admin_password)
+    row = db.query(PulseEmailReport).filter(PulseEmailReport.id == report_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Email report not found.")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
 # ── Price tracking ────────────────────────────────────────────────────────────
 
 from pydantic import BaseModel
@@ -474,11 +748,12 @@ def delete_price(
 
 class VesselTrackRequest(BaseModel):
     imo: list[str]
+    mmsi_map: dict[str, str] = {}   # { imo -> mmsi }
 
 @app.post("/api/vessel-positions")
 def post_vessel_positions(body: VesselTrackRequest):
-    """Register IMOs to track and return current cached positions."""
-    vessel_tracker.update_tracked(body.imo)
+    """Register vessels to track (by IMO + MMSI) and return current cached positions."""
+    vessel_tracker.update_tracked(body.imo, body.mmsi_map)
     return vessel_tracker.get_positions(body.imo)
 
 

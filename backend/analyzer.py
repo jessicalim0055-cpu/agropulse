@@ -201,6 +201,99 @@ Respond with VALID JSON ONLY — no markdown, no explanation outside the JSON:
         return {"summary": "", "sentiments": []}
 
 
+PARITY_SYSTEM_PROMPT = """You are a senior trader specialising in Indian pulse and oilseed imports.
+You analyse parity reports that cover FOB origin prices, ocean freight, CIF India levels, import duty,
+and all-in landed costs. Extract all price data precisely and structure it clearly for a trading desk."""
+
+_MOCK_PARITY = {
+    "sender": "Priya Sharma <priya@indiapulses.com>",
+    "email_date": "2026-05-02",
+    "overview": "Indian import parities remain supportive for Canadian yellow peas with FOB values firming on tight nearby supply. Australian desi chickpeas showing competitive landed cost into Nhava Sheva this week. Red lentil parities under mild pressure from Vancouver freight levels.",
+    "parities": [
+        {"commodity": "Canada Yellow Peas",       "origin": "Canada / Vancouver",    "fob": "USD 285/MT FOB",  "freight": "USD 65/MT",  "cif_india": "USD 350/MT CIF JNPT", "duty": "Nil (exemption in force)", "landing_cost": "~USD 358/MT",  "notes": "Tight spot, holders firm"},
+        {"commodity": "Canada Red Lentils",        "origin": "Canada / Vancouver",    "fob": "USD 515/MT FOB",  "freight": "USD 70/MT",  "cif_india": "USD 585/MT CIF JNPT", "duty": "Nil",                      "landing_cost": "~USD 595/MT",  "notes": "Some competition from Aus"},
+        {"commodity": "Canada Green Peas",         "origin": "Canada / Vancouver",    "fob": "USD 312/MT FOB",  "freight": "USD 65/MT",  "cif_india": "USD 377/MT CIF JNPT", "duty": "Nil",                      "landing_cost": "~USD 385/MT",  "notes": "Limited inquiry"},
+        {"commodity": "Australia Desi Chickpeas",  "origin": "Australia / Melbourne", "fob": "USD 630/MT FOB",  "freight": "USD 45/MT",  "cif_india": "USD 675/MT CIF JNPT", "duty": "66% (incl. BCD+AIDC)",     "landing_cost": "~USD 1120/MT", "notes": "Duty makes it uncompetitive currently"},
+        {"commodity": "Australia Nipper Lentils",  "origin": "Australia / Adelaide",  "fob": "USD 495/MT FOB",  "freight": "USD 48/MT",  "cif_india": "USD 543/MT CIF JNPT", "duty": "Nil",                      "landing_cost": "~USD 555/MT",  "notes": "Steady demand from processors"},
+        {"commodity": "Russian Yellow Peas",       "origin": "Russia / Novorossiysk", "fob": "USD 252/MT FOB",  "freight": "USD 42/MT",  "cif_india": "USD 294/MT CIF JNPT", "duty": "Nil",                      "landing_cost": "~USD 302/MT",  "notes": "Cheapest origin for peas"},
+        {"commodity": "Russian Flax Seeds",        "origin": "Russia / Novorossiysk", "fob": "USD 525/MT FOB",  "freight": "USD 42/MT",  "cif_india": "USD 567/MT CIF JNPT", "duty": "30%",                      "landing_cost": "~USD 738/MT",  "notes": "High duty limiting volume"},
+    ],
+    "freight_notes": "Handysize freight on Vancouver–JNPT route eased USD 2–3/MT w/w to around USD 64–66/MT. Black Sea–JNPT holding at USD 40–43/MT, providing Russian origin a structural freight advantage of ~USD 22/MT vs Canada.",
+    "duty_structure": "Yellow peas, red/green lentils remain duty-free under the current government notification (valid through Sept 2026). Desi chickpeas attract 66% effective duty (BCD 40% + AIDC 20% + other levies). Flaxseed duty at 30% BCD.",
+    "key_highlights": [
+        "Russian yellow peas remain the cheapest pea origin at ~USD 302/MT landed, USD 56/MT below Canadian equivalent",
+        "Canadian yellow pea FOB firmed USD 3/MT w/w on strong inquiry from Kolkata-based importers",
+        "Desi chickpea duty remains prohibitive — no commercial business likely until structure changes",
+        "Red lentil parity into India still workable at ~USD 595/MT vs domestic prices of ~INR 9,200/qtl (~USD 670/MT equivalent)",
+        "INR at 83.7 per USD — slight depreciation adding ~1.2% to landed costs vs last week",
+    ],
+    "outlook": "Yellow pea parities likely to stay supported near-term given tight Canadian stocks and ongoing Indian demand. Red lentil buyers may find better value in Australian origin if freight differential narrows. Watch for any duty notification changes on chickpeas ahead of kharif sowing season.",
+}
+
+
+def analyze_parity_email(text: str, sender: str = "", email_date: str = "") -> dict:
+    """Extract parity table and market data from a pulses parity report email."""
+    if _is_demo_mode():
+        logger.info("Demo mode — returning mock parity email analysis")
+        return dict(_MOCK_PARITY)
+
+    context = ""
+    if sender:
+        context += f"Sender: {sender}\n"
+    if email_date:
+        context += f"Date: {email_date}\n"
+
+    prompt = f"""Analyse this pulses parity report email and extract all market data.
+
+{context}
+Email content:
+{text[:14000]}
+
+Return VALID JSON ONLY with this exact structure:
+{{
+  "sender": "sender name/email if identifiable, else empty string",
+  "email_date": "date of the report (YYYY-MM-DD if possible, else as written)",
+  "overview": "2-3 sentence summary of key market messages and price direction",
+  "parities": [
+    {{
+      "commodity": "Full commodity name",
+      "origin": "Origin country / port",
+      "fob": "FOB price and basis (e.g. USD 285/MT FOB Vancouver)",
+      "freight": "Ocean freight rate (e.g. USD 65/MT)",
+      "cif_india": "CIF India price and port (e.g. USD 350/MT CIF JNPT)",
+      "duty": "Import duty rate or amount",
+      "landing_cost": "All-in landed cost",
+      "notes": "Any relevant remarks, quality, incoterm details"
+    }}
+  ],
+  "freight_notes": "Freight market commentary (rates, routes, trends)",
+  "duty_structure": "Current Indian import duty structure for relevant commodities",
+  "key_highlights": ["highlight 1", "highlight 2", "highlight 3"],
+  "outlook": "Forward price direction and key catalysts"
+}}
+
+Include all commodities with parity data found in the email.
+If a field is not available, use an empty string.
+Only return commodities actually mentioned in the email."""
+
+    try:
+        client = get_client()
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=3000,
+            system=PARITY_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            parts = raw.split("```")
+            raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
+        return json.loads(raw)
+    except Exception as e:
+        logger.error(f"Parity email analysis error: {e}")
+        return {"overview": "Analysis failed — please try again.", "parities": [], "key_highlights": [], "outlook": ""}
+
+
 def analyze_report(text: str) -> dict:
     """Summarise a weekly market report into structured price/acreage/theme data."""
     if _is_demo_mode():

@@ -7,10 +7,10 @@ export default function SentimentDashboard({ sentiment, selectedCommodity, onSel
 
   return (
     <section>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-3">
         <div>
           <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Market Sentiment</h2>
-          <p className="text-xs text-slate-500 mt-0.5">Based on news from the last 7 days · click to filter</p>
+          <p className="text-xs text-slate-500 mt-0.5">7-day signal · click to filter news</p>
         </div>
         {selectedCommodity && (
           <button
@@ -22,7 +22,7 @@ export default function SentimentDashboard({ sentiment, selectedCommodity, onSel
         )}
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+      <div className="space-y-2">
         {entries.map((data) => (
           <SentimentCard
             key={data.key}
@@ -31,12 +31,6 @@ export default function SentimentDashboard({ sentiment, selectedCommodity, onSel
             onClick={() => onSelectCommodity(selectedCommodity === data.key ? null : data.key)}
           />
         ))}
-      </div>
-
-      <div className="flex gap-4 mt-3 text-xs text-slate-500 dark:text-slate-600">
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Bullish</span>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> Neutral</span>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" /> Bearish</span>
       </div>
     </section>
   )
