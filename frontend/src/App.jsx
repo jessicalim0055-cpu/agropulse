@@ -3,10 +3,11 @@ import Header from './components/Header'
 import SentimentDashboard from './components/SentimentDashboard'
 import TrendSection from './components/TrendSection'
 import NewsFeed from './components/NewsFeed'
-import ReportAnalyzer from './components/ReportAnalyzer'
+import ReportAnalyser from './components/ReportAnalyser'
 import ConflictTracker from './components/ConflictTracker'
 import VesselTracker from './components/VesselTracker'
 import EmailReports from './components/EmailReports'
+import WeatherDashboard from './components/WeatherDashboard'
 
 const POLL_MS = 5 * 60 * 1000 // auto-reload every 5 min
 
@@ -118,9 +119,11 @@ export default function App() {
         ) : activeTab === 'conflicts' ? (
           <ConflictTracker />
         ) : activeTab === 'reports' ? (
-          <ReportAnalyzer />
+          <ReportAnalyser />
         ) : activeTab === 'emails' ? (
           <EmailReports />
+        ) : activeTab === 'weather' ? (
+          <WeatherDashboard />
         ) : (
           <>
             <div className="flex gap-5 items-start">

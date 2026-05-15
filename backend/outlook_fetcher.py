@@ -228,6 +228,142 @@ def fetch_parity_emails(already_seen_ids: set[str], days_back: int = 60) -> list
     return results
 
 
+LEFTFIELD_SENDER = "leftfield@leftfieldcr.com"
+
+_PDF_MAGIC = b"%PDF"
+
+
+def _find_and_download_pdf(body_html: str, subject: str) -> tuple[bytes | None, str]:
+    """
+    Parse HTML email body, extract all href links, find and download the PDF.
+    Returns (pdf_bytes, filename) or (None, "").
+    """
+    # Extract all href values from the HTML
+    links = re.findall(r'href=["\']([^"\'>\s]+)["\']', body_html, re.IGNORECASE)
+
+    # Deduplicate while preserving order; skip mailto / anchor / tracking pixel urls
+    seen_links: set[str] = set()
+    external_links: list[str] = []
+    for link in links:
+        if link in seen_links:
+            continue
+        seen_links.add(link)
+        if not link.startswith("http"):
+            continue
+        low = link.lower()
+        if "unsubscribe" in low or "mailto" in low or "open.php" in low:
+            continue
+        external_links.append(link)
+
+    # Priority 1: URLs that explicitly end with .pdf (before query string)
+    pdf_first = [l for l in external_links if re.search(r"\.pdf($|\?|#)", l, re.IGNORECASE)]
+    ordered = pdf_first + [l for l in external_links if l not in pdf_first]
+
+    for url in ordered:
+        try:
+            resp = requests.get(url, timeout=20, allow_redirects=True,
+                                headers={"User-Agent": "Mozilla/5.0"})
+            if not resp.ok:
+                continue
+            content = resp.content
+            # Detect PDF by magic bytes or Content-Type
+            content_type = resp.headers.get("Content-Type", "").lower()
+            if not (content[:4] == _PDF_MAGIC or "pdf" in content_type):
+                continue
+            # Derive filename from URL or Content-Disposition
+            fname = ""
+            cd = resp.headers.get("Content-Disposition", "")
+            m = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd, re.IGNORECASE)
+            if m:
+                fname = m.group(1).strip()
+            if not fname:
+                fname = url.split("/")[-1].split("?")[0] or "report.pdf"
+                if not fname.lower().endswith(".pdf"):
+                    fname += ".pdf"
+            logger.info(f"Leftfield: downloaded PDF '{fname}' from {url[:80]}")
+            return content, fname
+        except Exception as e:
+            logger.debug(f"Leftfield link attempt failed ({url[:60]}): {e}")
+            continue
+
+    logger.warning(f"Leftfield: no downloadable PDF found in email '{subject}'")
+    return None, ""
+
+
+def fetch_leftfield_emails(already_seen_ids: set[str]) -> list[dict]:
+    """
+    Fetch emails from leftfield@leftfieldcr.com.
+    Extracts the PDF download link from the email body and downloads the report.
+    Returns list of dicts: id (prefixed), subject, received, attachment_name, attachment_bytes
+    """
+    token = get_token()
+    if not token:
+        logger.warning("Outlook not authenticated — skipping leftfield sync")
+        return []
+
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {
+        "$search": f'"from:{LEFTFIELD_SENDER}"',
+        "$top": 25,
+        "$select": "id,subject,receivedDateTime,body",
+    }
+
+    try:
+        resp = requests.get(
+            f"{GRAPH_BASE}/me/messages",
+            headers={**headers, "ConsistencyLevel": "eventual"},
+            params=params,
+            timeout=30,
+        )
+        if resp.status_code == 401:
+            logger.error("Outlook token rejected — please re-authenticate")
+            disconnect()
+            return []
+        if not resp.ok:
+            logger.error(f"Graph API {resp.status_code}: {resp.text[:300]}")
+            return []
+    except Exception as e:
+        logger.error(f"Leftfield email fetch error: {e}")
+        return []
+
+    messages = sorted(
+        resp.json().get("value", []),
+        key=lambda m: m.get("receivedDateTime", ""),
+        reverse=True,
+    )
+
+    results = []
+
+    for msg in messages:
+        msg_id = msg.get("id", "")
+        lf_id = f"leftfield:{msg_id}"
+        if lf_id in already_seen_ids:
+            continue
+
+        subject = msg.get("subject", "")
+        received = msg.get("receivedDateTime", "")
+
+        body_obj = msg.get("body", {})
+        body_html = body_obj.get("content", "")
+        if not body_html:
+            logger.warning(f"Leftfield: empty body for email '{subject}' — skipping")
+            continue
+
+        pdf_bytes, fname = _find_and_download_pdf(body_html, subject)
+        if pdf_bytes is None:
+            continue
+
+        results.append({
+            "id": lf_id,
+            "subject": subject,
+            "received": received,
+            "attachment_name": fname,
+            "attachment_bytes": pdf_bytes,
+        })
+
+    return results
+
+
 def get_config() -> dict:
     return {
         "configured": bool(os.getenv("AZURE_CLIENT_ID")),

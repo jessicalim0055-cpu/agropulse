@@ -294,6 +294,109 @@ Only return commodities actually mentioned in the email."""
         return {"overview": "Analysis failed — please try again.", "parities": [], "key_highlights": [], "outlook": ""}
 
 
+LEFTFIELD_SYSTEM_PROMPT = """You are a senior agricultural commodities analyst. You extract structured
+market intelligence from weekly research reports covering pulse and oilseed markets — specifically
+Canada, Australia, and Russian origin crops. Extract all price data as precise numeric values."""
+
+_MOCK_LEFTFIELD = {
+    "report_date": "2026-05-09",
+    "title": "Global Pulses & Oilseeds Weekly — Week 19/2026",
+    "overview": "Canadian pulse markets held firm underpinned by tight nearby supply and steady South Asian import demand. Australian chickpea FOB softened on harvest pressure while Russian yellow pea offers remained competitive on freight differential. Lentil markets showed mixed signals ahead of the new-crop season.",
+    "commodity_prices": [
+        {"commodity": "Canada Yellow Peas",       "price_usd": 285.0, "price_basis": "FOB Vancouver",      "change_usd":  3.0, "direction": "up",   "detail": "USD 285/MT FOB Vancouver, firmed $3 w/w on strong Indian inquiry; limited spot availability"},
+        {"commodity": "Canada Red Lentils",        "price_usd": 515.0, "price_basis": "FOB Vancouver",      "change_usd": -5.0, "direction": "down", "detail": "USD 515/MT FOB Vancouver, eased $5 w/w on Australian competition; Turkish demand softer"},
+        {"commodity": "Canada Green Peas",         "price_usd": 312.0, "price_basis": "FOB Vancouver",      "change_usd":  0.0, "direction": "flat", "detail": "USD 312/MT FOB Vancouver, steady w/w; limited spot inquiry, holders firm on offer"},
+        {"commodity": "Australia Desi Chickpeas",  "price_usd": 628.0, "price_basis": "FOB Melbourne",      "change_usd": -8.0, "direction": "down", "detail": "USD 628/MT FOB Melbourne, eased $8 w/w on harvest pressure; Pakistani demand tepid"},
+        {"commodity": "Australia Nipper Lentils",  "price_usd": 495.0, "price_basis": "FOB Adelaide",       "change_usd":  5.0, "direction": "up",   "detail": "USD 495/MT FOB Adelaide, firmed $5 w/w as harvest arrivals slow; stocks tightening"},
+        {"commodity": "Russian Yellow Peas",       "price_usd": 252.0, "price_basis": "FOB Novorossiysk",   "change_usd": -3.0, "direction": "down", "detail": "USD 252/MT FOB Novorossiysk, offered $3 lower on aggressive seller competition"},
+        {"commodity": "Russian Flax Seeds",        "price_usd": 525.0, "price_basis": "FOB Novorossiysk",   "change_usd":  0.0, "direction": "flat", "detail": "USD 525/MT FOB Novorossiysk, unchanged w/w; European crush buyers sidelined"},
+    ],
+    "supply_demand": "Global yellow pea balance remains snug with Indian carry-in stocks below 5-year average. Canadian exportable surplus for yellow peas tightening — total bookings tracking 18% above year-ago pace. Australian lentil exportable surplus estimated 900K MT, largely committed to Turkish and Egyptian end-users.",
+    "trade_flows": "India imported 380K MT of yellow peas in March (+28% y/y), April pace tracking similarly strong. Bangladesh tendered 50K MT red lentils. China absent from pulse markets for 4th consecutive week. EU red lentil demand steady through Turkish re-export channel.",
+    "key_themes": [
+        "Indian import demand underpinning Canadian yellow pea and lentil FOB values",
+        "Australian chickpea harvest 18% above prior year, limiting near-term price upside",
+        "Russian origin maintaining structural $50–55/MT landed cost advantage vs Canadian peas",
+        "Dryness across Saskatchewan — early crop premium building in forward positions",
+        "INR at 83.7/USD creating mild headwind for Indian import affordability",
+    ],
+    "risk_factors": [
+        "Saskatchewan soil moisture deficit widening — July crop estimate could surprise lower",
+        "Potential Indian duty notification changes on chickpeas ahead of kharif season",
+        "Black Sea shipping disruptions may temporarily tighten Russian availability",
+        "AUD/USD movement could shift Australian origin competitiveness rapidly",
+    ],
+    "market_commentary": "The spread between Canadian and Russian yellow pea landed costs in India has widened to ~USD 56/MT, the widest since October 2025. This is incentivising Indian buyers to favour Russian origin where possible, though vessel availability and shipment timing constraints are limiting the switch.",
+    "outlook": "Near-term bias mildly bullish for Canadian yellow peas (tight supply, strong demand) and Australian nipper lentils (stocks tightening). Red lentils and Russian yellow peas face downward pressure. Key catalysts: Saskatchewan early crop assessment and Indian duty notifications on chickpeas.",
+}
+
+
+def analyze_leftfield_report(text: str, subject: str = "", received_date: str = "") -> dict:
+    """Extract structured market intelligence from a Leftfield Capital Research weekly report PDF."""
+    if _is_demo_mode():
+        logger.info("Demo mode — returning mock leftfield report")
+        return dict(_MOCK_LEFTFIELD)
+
+    context = ""
+    if subject:
+        context += f"Email subject: {subject}\n"
+    if received_date:
+        context += f"Received date: {received_date}\n"
+
+    prompt = f"""Analyse this weekly agricultural market research report and extract all key data.
+
+{context}
+Report content:
+{text[:14000]}
+
+Return VALID JSON ONLY with this exact structure:
+{{
+  "report_date": "YYYY-MM-DD (best estimate from report content or received date)",
+  "title": "Report title or series name if identifiable",
+  "overview": "2-3 sentence executive summary focused on price direction and key market themes",
+  "commodity_prices": [
+    {{
+      "commodity": "Full commodity name (e.g. Canada Yellow Peas)",
+      "price_usd": 285.0,
+      "price_basis": "Price basis (e.g. FOB Vancouver)",
+      "change_usd": 3.0,
+      "direction": "up|down|flat",
+      "detail": "Full price description including context and w/w change narrative"
+    }}
+  ],
+  "supply_demand": "Key supply/demand balance observations in 2-3 sentences",
+  "trade_flows": "Notable export/import flows, tender activity, key buyer/seller dynamics",
+  "key_themes": ["concise theme 1", "concise theme 2", "concise theme 3"],
+  "risk_factors": ["risk 1", "risk 2"],
+  "market_commentary": "Broader market context, spreads, freight dynamics, or macro factors",
+  "outlook": "Forward price direction and key catalysts to watch over the next 4-6 weeks"
+}}
+
+Rules:
+- price_usd must be a number (null if not found)
+- change_usd must be a number (positive = price rose, negative = fell, 0 = flat, null if unknown)
+- direction must be "up", "down", or "flat"
+- Include all commodities with price data found in the report
+- If a section has no data, use [] or "" as appropriate"""
+
+    try:
+        client = get_client()
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=3000,
+            system=LEFTFIELD_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            parts = raw.split("```")
+            raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
+        return json.loads(raw)
+    except Exception as e:
+        logger.error(f"Leftfield report analysis error: {e}")
+        return {"overview": "Analysis failed — please try again.", "commodity_prices": [], "key_themes": [], "outlook": ""}
+
+
 def analyze_report(text: str) -> dict:
     """Summarise a weekly market report into structured price/acreage/theme data."""
     if _is_demo_mode():

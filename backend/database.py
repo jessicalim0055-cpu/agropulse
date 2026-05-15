@@ -71,6 +71,16 @@ class PriceEntry(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class LeftfieldReport(Base):
+    __tablename__ = "leftfield_reports"
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String(512))
+    email_subject = Column(String(512), nullable=True)
+    report_date = Column(String(64), nullable=True)
+    synced_at = Column(DateTime, server_default=func.now())
+    data_json = Column(Text, nullable=False)
+
+
 def create_tables():
     Base.metadata.create_all(bind=engine)
 

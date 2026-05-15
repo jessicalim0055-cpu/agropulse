@@ -1,59 +1,45 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { Mail, ArrowRight, Lock, Unlock, Trash2, RefreshCw, Wifi, WifiOff, ExternalLink, TrendingUp, Calendar } from 'lucide-react'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+import { FileText, ArrowRight, Lock, Unlock, Trash2, RefreshCw, Wifi, WifiOff,
+         ExternalLink, TrendingUp, TrendingDown, Minus, Calendar, AlertTriangle } from 'lucide-react'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from 'recharts'
 
 const SESSION_KEY = 'agropulse_admin_pw'
 
-// ── Chart helpers ─────────────────────────────────────────────────────────────
-
-const METRIC_KEYS = [
-  { key: 'fob',          label: 'FOB' },
-  { key: 'cif_india',    label: 'CIF India' },
-  { key: 'landing_cost', label: 'Landing Cost' },
-  { key: 'freight',      label: 'Freight' },
-]
-
 const COMMODITY_COLORS = ['#d97706', '#dc2626', '#059669', '#0284c7', '#7c3aed', '#ea580c', '#db2777']
 
-function parsePrice(str) {
-  if (!str) return null
-  const m = String(str).replace(/,/g, '').match(/\d+\.?\d*/)
-  return m ? parseFloat(m[0]) : null
-}
+// ── Chart ─────────────────────────────────────────────────────────────────────
 
-function buildChartData(reports, metricKey) {
+function buildChartData(reports) {
   const byDate = {}
   reports.forEach(r => {
-    if (!r.email_date || !Array.isArray(r.parities) || !r.parities.length) return
-    if (!byDate[r.email_date] || r.uploaded_at > byDate[r.email_date].uploaded_at)
-      byDate[r.email_date] = r
+    if (!r.report_date || !Array.isArray(r.commodity_prices) || !r.commodity_prices.length) return
+    if (!byDate[r.report_date] || r.synced_at > byDate[r.report_date].synced_at)
+      byDate[r.report_date] = r
   })
-  const sorted = Object.values(byDate).sort((a, b) => a.email_date.localeCompare(b.email_date))
+  const sorted = Object.values(byDate).sort((a, b) => a.report_date.localeCompare(b.report_date))
   if (sorted.length < 2) return { rows: [], commodities: [] }
 
   const commoditySet = new Set()
-  sorted.forEach(r => r.parities.forEach(p => { if (p.commodity) commoditySet.add(p.commodity) }))
+  sorted.forEach(r => r.commodity_prices.forEach(p => { if (p.commodity && p.price_usd != null) commoditySet.add(p.commodity) }))
   const commodities = [...commoditySet]
 
   const rows = sorted.map(r => {
-    const row = { date: r.email_date }
-    r.parities.forEach(p => {
-      const val = parsePrice(p[metricKey])
-      if (val !== null) row[p.commodity] = val
+    const row = { date: r.report_date }
+    r.commodity_prices.forEach(p => {
+      if (p.price_usd != null) row[p.commodity] = p.price_usd
     })
     return row
   })
   return { rows, commodities }
 }
 
-function ParityTrendChart({ reports, highlightDate }) {
-  const [metric, setMetric] = useState('landing_cost')
-  const { rows, commodities } = buildChartData(reports, metric)
+function PriceTrendChart({ reports, highlightDate }) {
+  const { rows, commodities } = buildChartData(reports)
 
   if (rows.length < 2) return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 text-center">
       <TrendingUp size={18} className="mx-auto mb-2 text-slate-300 dark:text-slate-700" />
-      <p className="text-xs text-slate-400 dark:text-slate-600">Chart appears once 2+ weekly reports are available</p>
+      <p className="text-xs text-slate-400 dark:text-slate-600">Chart appears once 2+ weekly reports are synced</p>
     </div>
   )
 
@@ -65,24 +51,12 @@ function ParityTrendChart({ reports, highlightDate }) {
 
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-        <div className="flex items-center gap-2">
-          <TrendingUp size={13} className="text-emerald-600 dark:text-emerald-400" />
-          <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">Week-on-Week Trends</span>
-          <span className="text-[10px] text-slate-400">USD/MT · selected week highlighted</span>
-        </div>
-        <div className="flex gap-1">
-          {METRIC_KEYS.map(m => (
-            <button key={m.key} onClick={() => setMetric(m.key)}
-              className={`px-2.5 py-1 text-[10px] font-semibold rounded-md border transition-all
-                ${metric === m.key
-                  ? 'bg-emerald-600 text-white border-emerald-600'
-                  : 'bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-slate-400'}`}
-            >{m.label}</button>
-          ))}
-        </div>
+      <div className="flex items-center gap-2 mb-3">
+        <TrendingUp size={13} className="text-emerald-600 dark:text-emerald-400" />
+        <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">FOB Price Trends</span>
+        <span className="text-[10px] text-slate-400">USD/MT · selected week highlighted</span>
       </div>
-      <ResponsiveContainer width="100%" height={220}>
+      <ResponsiveContainer width="100%" height={230}>
         <LineChart data={rows} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" strokeOpacity={0.5} />
           <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#94a3b8' }} tickLine={false} axisLine={false} />
@@ -106,46 +80,54 @@ function ParityTrendChart({ reports, highlightDate }) {
   )
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Report detail ─────────────────────────────────────────────────────────────
 
-function Badge({ children, color = 'slate' }) {
-  const cls = {
-    emerald: 'bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-700/40',
-    slate:   'bg-slate-100 text-slate-600 border-slate-300 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700',
-    amber:   'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700/40',
-  }[color] || ''
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${cls}`}>
-      {children}
-    </span>
-  )
+const DIR_ICON = { up: TrendingUp, down: TrendingDown, flat: Minus }
+const DIR_COLOR = {
+  up:   'text-emerald-600 dark:text-emerald-400',
+  down: 'text-red-500 dark:text-red-400',
+  flat: 'text-slate-400',
+}
+const DIR_BG = {
+  up:   'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800/40',
+  down: 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800/40',
+  flat: 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700',
 }
 
-function ParityTable({ parities }) {
-  if (!parities?.length) return null
+function PriceGrid({ prices }) {
+  if (!prices?.length) return null
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-            {['Commodity', 'Origin', 'FOB', 'Freight', 'CIF India', 'Duty', 'Landing Cost', 'Notes'].map(h => (
+            {['Commodity', 'Price', 'Basis', 'W/W', 'Detail'].map(h => (
               <th key={h} className="text-left px-3 py-2 text-slate-500 font-semibold uppercase tracking-wider whitespace-nowrap">{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {parities.map((p, i) => (
-            <tr key={i} className={`border-b border-slate-100 dark:border-slate-800/60 last:border-0 ${i % 2 !== 0 ? 'bg-slate-50/50 dark:bg-slate-800/20' : ''}`}>
-              <td className="px-3 py-2 font-medium text-slate-800 dark:text-slate-200 whitespace-nowrap">{p.commodity}</td>
-              <td className="px-3 py-2 text-slate-600 dark:text-slate-400 whitespace-nowrap">{p.origin}</td>
-              <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap font-mono">{p.fob || '—'}</td>
-              <td className="px-3 py-2 text-slate-600 dark:text-slate-400 whitespace-nowrap font-mono">{p.freight || '—'}</td>
-              <td className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap font-mono">{p.cif_india || '—'}</td>
-              <td className="px-3 py-2 text-slate-600 dark:text-slate-400 whitespace-nowrap">{p.duty || '—'}</td>
-              <td className="px-3 py-2 font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap font-mono">{p.landing_cost || '—'}</td>
-              <td className="px-3 py-2 text-slate-500 dark:text-slate-500 max-w-[180px]">{p.notes || ''}</td>
-            </tr>
-          ))}
+          {prices.map((p, i) => {
+            const dir = p.direction || 'flat'
+            const DirIcon = DIR_ICON[dir] || Minus
+            const chg = p.change_usd
+            return (
+              <tr key={i} className={`border-b border-slate-100 dark:border-slate-800/60 last:border-0 ${i % 2 !== 0 ? 'bg-slate-50/50 dark:bg-slate-800/20' : ''}`}>
+                <td className="px-3 py-2 font-medium text-slate-800 dark:text-slate-200 whitespace-nowrap">{p.commodity}</td>
+                <td className="px-3 py-2 font-mono font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                  {p.price_usd != null ? `$${p.price_usd}` : '—'}
+                </td>
+                <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{p.price_basis || '—'}</td>
+                <td className={`px-3 py-2 whitespace-nowrap font-mono ${DIR_COLOR[dir]}`}>
+                  <span className="flex items-center gap-1">
+                    <DirIcon size={10} />
+                    {chg != null && chg !== 0 ? `${chg > 0 ? '+' : ''}$${chg}` : '—'}
+                  </span>
+                </td>
+                <td className="px-3 py-2 text-slate-500 dark:text-slate-500 max-w-[260px]">{p.detail || ''}</td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
@@ -155,22 +137,27 @@ function ParityTable({ parities }) {
 function ReportDetail({ report, isAdmin, onDelete }) {
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+      {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40">
-        <Mail size={13} className="text-emerald-600 dark:text-emerald-500 flex-shrink-0" />
-        <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">{report.sender || report.filename}</span>
-          {report.email_date && <Badge color="slate">{report.email_date}</Badge>}
-          {report.parities?.length > 0 && <Badge color="emerald">{report.parities.length} commodities</Badge>}
+        <FileText size={13} className="text-emerald-600 dark:text-emerald-500 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
+            {report.title || report.email_subject || report.filename}
+          </p>
+          <p className="text-[10px] text-slate-400 mt-0.5">
+            {report.report_date} · {report.filename}
+          </p>
         </div>
         {isAdmin && (
           <button onClick={() => onDelete(report.id)}
-            className="text-slate-400 hover:text-red-500 dark:hover:text-red-400 transition-colors flex-shrink-0" title="Delete">
+            className="text-slate-400 hover:text-red-500 transition-colors flex-shrink-0" title="Delete">
             <Trash2 size={12} />
           </button>
         )}
       </div>
 
       <div className="px-4 py-4 space-y-4">
+        {/* Overview */}
         {report.overview && (
           <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/30 rounded-lg p-3">
             <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest mb-1.5">Overview</p>
@@ -178,44 +165,71 @@ function ReportDetail({ report, isAdmin, onDelete }) {
           </div>
         )}
 
-        {report.parities?.length > 0 && (
+        {/* Price table */}
+        {report.commodity_prices?.length > 0 && (
           <div>
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Parity Table</p>
+            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Commodity Prices</p>
             <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-              <ParityTable parities={report.parities} />
+              <PriceGrid prices={report.commodity_prices} />
             </div>
           </div>
         )}
 
+        {/* Supply/demand + Trade flows */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {report.freight_notes && (
+          {report.supply_demand && (
             <div className="border border-slate-200 dark:border-slate-800 rounded-lg p-3">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Freight</p>
-              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">{report.freight_notes}</p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Supply & Demand</p>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">{report.supply_demand}</p>
             </div>
           )}
-          {report.duty_structure && (
+          {report.trade_flows && (
             <div className="border border-slate-200 dark:border-slate-800 rounded-lg p-3">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Duty Structure</p>
-              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">{report.duty_structure}</p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Trade Flows</p>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">{report.trade_flows}</p>
             </div>
           )}
         </div>
 
-        {report.key_highlights?.length > 0 && (
+        {/* Market commentary */}
+        {report.market_commentary && (
           <div className="border border-slate-200 dark:border-slate-800 rounded-lg p-3">
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Key Highlights</p>
-            <ul className="space-y-1">
-              {report.key_highlights.map((h, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-xs text-slate-600 dark:text-slate-400">
-                  <ArrowRight size={11} className="text-emerald-600 dark:text-emerald-500 flex-shrink-0 mt-0.5" />
-                  {h}
-                </li>
-              ))}
-            </ul>
+            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Market Commentary</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">{report.market_commentary}</p>
           </div>
         )}
 
+        {/* Key themes + Risk factors */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {report.key_themes?.length > 0 && (
+            <div className="border border-slate-200 dark:border-slate-800 rounded-lg p-3">
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Key Themes</p>
+              <ul className="space-y-1">
+                {report.key_themes.map((t, i) => (
+                  <li key={i} className="flex items-start gap-1.5 text-xs text-slate-600 dark:text-slate-400">
+                    <ArrowRight size={10} className="text-emerald-600 flex-shrink-0 mt-0.5" />
+                    {t}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {report.risk_factors?.length > 0 && (
+            <div className="border border-slate-200 dark:border-slate-800 rounded-lg p-3">
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Risk Factors</p>
+              <ul className="space-y-1">
+                {report.risk_factors.map((r, i) => (
+                  <li key={i} className="flex items-start gap-1.5 text-xs text-slate-600 dark:text-slate-400">
+                    <AlertTriangle size={10} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        {/* Outlook */}
         {report.outlook && (
           <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/30 rounded-lg p-3">
             <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest mb-1.5">Outlook</p>
@@ -227,7 +241,7 @@ function ReportDetail({ report, isAdmin, onDelete }) {
   )
 }
 
-// ── Compact Outlook status bar ────────────────────────────────────────────────
+// ── Outlook bar ───────────────────────────────────────────────────────────────
 
 function OutlookBar({ isAdmin, reportCount, setReports }) {
   const [status, setStatus]         = useState(null)
@@ -265,15 +279,9 @@ function OutlookBar({ isAdmin, reportCount, setReports }) {
         method: 'POST',
         headers: { 'x-admin-password': sessionStorage.getItem(SESSION_KEY) || '' },
       })
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({}))
-        throw new Error(e.detail || 'Failed to start auth')
-      }
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Failed to start auth')
       setDeviceFlow(await res.json())
-    } catch (e) {
-      alert(e.message)
-      setConnecting(false)
-    }
+    } catch (e) { alert(e.message); setConnecting(false) }
   }
 
   const handleDisconnect = async () => {
@@ -288,14 +296,14 @@ function OutlookBar({ isAdmin, reportCount, setReports }) {
     setSyncing(true)
     const countBefore = reportCount
     try {
-      await fetch('/api/outlook/sync', {
+      await fetch('/api/leftfield/sync', {
         method: 'POST',
         headers: { 'x-admin-password': sessionStorage.getItem(SESSION_KEY) || '' },
       })
       let attempts = 0
       const poll = setInterval(async () => {
         attempts++
-        const data = await fetch('/api/parity-emails').then(r => r.json()).catch(() => null)
+        const data = await fetch('/api/leftfield-reports').then(r => r.json()).catch(() => null)
         if (!data) return
         if (data.length > countBefore || attempts > 30) {
           clearInterval(poll)
@@ -307,13 +315,11 @@ function OutlookBar({ isAdmin, reportCount, setReports }) {
   }
 
   if (!status) return null
-
   const connected = status.status === 'authenticated'
   const configured = status.configured
 
   return (
     <div className="space-y-2">
-      {/* Single-line status bar */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2.5 flex items-center gap-3">
         {connected
           ? <Wifi size={13} className="text-emerald-500 flex-shrink-0" />
@@ -324,7 +330,7 @@ function OutlookBar({ isAdmin, reportCount, setReports }) {
           {connected
             ? <> <span className="text-emerald-600 dark:text-emerald-400">● connected</span>
                 {status.email && <span className="text-slate-400 ml-1">· {status.email}</span>}
-                {status.sender && <span className="text-slate-400 ml-1">· watching {status.sender}</span>}
+                <span className="text-slate-400 ml-1">· watching leftfield@leftfieldcr.com</span>
               </>
             : <span className="text-slate-400"> ○ not connected</span>
           }
@@ -353,7 +359,6 @@ function OutlookBar({ isAdmin, reportCount, setReports }) {
         )}
       </div>
 
-      {/* Device code prompt (shown only when active) */}
       {deviceFlow && (
         <div className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl p-4 flex items-center gap-6 flex-wrap">
           <div>
@@ -374,14 +379,11 @@ function OutlookBar({ isAdmin, reportCount, setReports }) {
         </div>
       )}
 
-      {/* Setup instructions (only when Azure not configured) */}
       {!configured && (
         <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/30 rounded-xl px-4 py-3 space-y-1.5">
-          <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Add to backend/.env to enable Outlook sync:</p>
+          <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Add to backend/.env to enable:</p>
           <pre className="font-mono bg-white dark:bg-slate-800 rounded p-2 text-[10px] text-slate-600 dark:text-slate-400 overflow-x-auto">{`AZURE_CLIENT_ID=<Application ID>
-AZURE_TENANT_ID=<Tenant ID>
-PARITY_SENDER_EMAIL=priya@supplier.com
-PARITY_SUBJECT_FILTER=parity`}</pre>
+AZURE_TENANT_ID=<Tenant ID>`}</pre>
         </div>
       )}
     </div>
@@ -390,7 +392,7 @@ PARITY_SUBJECT_FILTER=parity`}</pre>
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function EmailReports() {
+export default function ReportAnalyser() {
   const [reports, setReports]   = useState([])
   const [fetching, setFetching] = useState(true)
   const [selected, setSelected] = useState(null)
@@ -400,12 +402,9 @@ export default function EmailReports() {
   const [pwError, setPwError]   = useState(false)
 
   useEffect(() => {
-    fetch('/api/parity-emails')
+    fetch('/api/leftfield-reports')
       .then(r => r.json())
-      .then(data => {
-        setReports(data)
-        if (data.length > 0) setSelected(data[0].id)
-      })
+      .then(data => { setReports(data); if (data.length > 0) setSelected(data[0].id) })
       .catch(() => {})
       .finally(() => setFetching(false))
   }, [])
@@ -413,19 +412,13 @@ export default function EmailReports() {
   const handleUnlock = () => {
     if (!pwInput.trim()) return
     sessionStorage.setItem(SESSION_KEY, pwInput)
-    setIsAdmin(true)
-    setShowPw(false)
-    setPwInput('')
-    setPwError(false)
+    setIsAdmin(true); setShowPw(false); setPwInput(''); setPwError(false)
   }
 
-  const handleLock = () => {
-    sessionStorage.removeItem(SESSION_KEY)
-    setIsAdmin(false)
-  }
+  const handleLock = () => { sessionStorage.removeItem(SESSION_KEY); setIsAdmin(false) }
 
   const handleDelete = useCallback(async (id) => {
-    await fetch(`/api/parity-emails/${id}`, {
+    await fetch(`/api/leftfield-reports/${id}`, {
       method: 'DELETE',
       headers: { 'x-admin-password': sessionStorage.getItem(SESSION_KEY) || '' },
     })
@@ -438,8 +431,8 @@ export default function EmailReports() {
 
   const sortedReports = useMemo(() =>
     [...reports].sort((a, b) =>
-      (b.email_date || '').localeCompare(a.email_date || '') ||
-      (b.uploaded_at || '').localeCompare(a.uploaded_at || '')
+      (b.report_date || '').localeCompare(a.report_date || '') ||
+      (b.synced_at || '').localeCompare(a.synced_at || '')
     ), [reports])
 
   const selectedReport = sortedReports.find(r => r.id === selected)
@@ -450,8 +443,10 @@ export default function EmailReports() {
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Parity Email Reports</h2>
-          <p className="text-xs text-slate-500 mt-0.5">Auto-synced from Outlook · AI-extracted parity data</p>
+          <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Leftfield</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Auto-synced from Outlook · leftfield@leftfieldcr.com · AI-extracted market intelligence
+          </p>
         </div>
         {isAdmin ? (
           <button onClick={handleLock}
@@ -466,10 +461,8 @@ export default function EmailReports() {
         )}
       </div>
 
-      {/* Outlook status bar */}
       <OutlookBar isAdmin={isAdmin} reportCount={reports.length} setReports={setReports} />
 
-      {/* Password input */}
       {showPw && !isAdmin && (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4 flex items-center gap-3">
           <input type="password" placeholder="Admin password" value={pwInput}
@@ -485,14 +478,13 @@ export default function EmailReports() {
         </div>
       )}
 
-      {/* Main panel */}
       {fetching ? (
         <div className="flex items-center justify-center h-32">
           <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
         </div>
       ) : reports.length === 0 ? (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-12 text-center text-slate-500 dark:text-slate-600 text-sm">
-          No parity emails yet — connect Outlook above and sync to get started.
+          No reports yet — connect Outlook above and sync to pull the latest Leftfield PDFs automatically.
         </div>
       ) : (
         <div className="flex gap-4" style={{ minHeight: 'calc(100vh - 290px)' }}>
@@ -504,6 +496,7 @@ export default function EmailReports() {
             </p>
             {sortedReports.map(r => {
               const isSel = r.id === selected
+              const priceCount = r.commodity_prices?.length || 0
               return (
                 <button key={r.id} onClick={() => setSelected(r.id)}
                   className={`w-full text-left px-3 py-2.5 rounded-lg border transition-all
@@ -513,13 +506,15 @@ export default function EmailReports() {
                   <div className="flex items-center gap-1.5 mb-0.5">
                     <Calendar size={9} className={isSel ? 'text-emerald-500' : 'text-slate-400'} />
                     <span className={`text-xs font-bold ${isSel ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-700 dark:text-slate-300'}`}>
-                      {r.email_date || 'Unknown date'}
+                      {r.report_date || 'Unknown'}
                     </span>
                   </div>
-                  <p className="text-[10px] text-slate-400 truncate pl-3.5">{r.sender || r.filename || '—'}</p>
-                  {r.parities?.length > 0 && (
+                  <p className="text-[10px] text-slate-400 truncate pl-3.5">
+                    {r.title || r.email_subject || r.filename || '—'}
+                  </p>
+                  {priceCount > 0 && (
                     <p className={`text-[10px] pl-3.5 mt-0.5 ${isSel ? 'text-emerald-600 dark:text-emerald-500' : 'text-slate-400'}`}>
-                      {r.parities.length} commodities
+                      {priceCount} commodities
                     </p>
                   )}
                 </button>
@@ -529,10 +524,10 @@ export default function EmailReports() {
 
           {/* Right: chart + detail */}
           <div className="flex-1 min-w-0 overflow-y-auto space-y-4">
-            <ParityTrendChart reports={reports} highlightDate={selectedReport?.email_date} />
+            <PriceTrendChart reports={reports} highlightDate={selectedReport?.report_date} />
             {selectedReport
               ? <ReportDetail report={selectedReport} isAdmin={isAdmin} onDelete={handleDelete} />
-              : <p className="text-center text-xs text-slate-400 py-8">Select a week on the left</p>
+              : <p className="text-center text-xs text-slate-400 py-8">Select a report on the left</p>
             }
           </div>
 

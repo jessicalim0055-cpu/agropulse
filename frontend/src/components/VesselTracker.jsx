@@ -58,16 +58,20 @@ function EtaBadge({ date, label = 'ETA' }) {
 }
 
 function makeIcon(L, color, course, isSelected, isLive) {
-  const deg  = (course ?? 0)
-  const ring = isSelected ? `box-shadow:0 0 0 3px ${color}55;border-radius:50%;` : ''
-  const html = `<div style="transform:rotate(${deg}deg);width:28px;height:28px;display:flex;align-items:center;justify-content:center;${ring}">
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-      <path d="M12 2 C12 2 7 14 7 17 Q7 22 12 22 Q17 22 17 17 C17 14 12 2 12 2Z"
-        fill="${color}" fill-opacity="${isLive ? 1 : 0.45}"
-        stroke="#0b1120" stroke-width="1.5"/>
+  const deg     = course ?? 0
+  const opacity = isLive ? 1 : 0.5
+  const ring    = isSelected ? `filter:drop-shadow(0 0 4px ${color});` : ''
+  // Top-down ship silhouette: pointed bow (top), wider stern (bottom)
+  const html = `<div style="transform:rotate(${deg}deg);width:32px;height:32px;display:flex;align-items:center;justify-content:center;${ring}">
+    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24">
+      <path d="M12 2 L18 8 L18 20 L12 23 L6 20 L6 8 Z"
+        fill="${color}" fill-opacity="${opacity}"
+        stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
+      <line x1="12" y1="2" x2="12" y2="8"
+        stroke="white" stroke-width="1" stroke-opacity="0.6"/>
     </svg>
   </div>`
-  return L.divIcon({ html, className: '', iconSize: [28, 28], iconAnchor: [14, 14] })
+  return L.divIcon({ html, className: '', iconSize: [32, 32], iconAnchor: [16, 16] })
 }
 
 export default function VesselTracker() {
@@ -132,7 +136,7 @@ export default function VesselTracker() {
     if (leafletRef.current || !mapRef.current || !window.L) return
     const L = window.L
     const map = L.map(mapRef.current, { center: [15, 80], zoom: 2, minZoom: 1, maxZoom: 10 })
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
       attribution: '© OpenStreetMap © CARTO', subdomains: 'abcd', maxZoom: 20,
     }).addTo(map)
     leafletRef.current = map

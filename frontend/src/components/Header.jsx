@@ -1,4 +1,4 @@
-import { RefreshCw, Sprout, LayoutDashboard, FileSearch, Globe, Ship, Sun, Moon, Mail } from 'lucide-react'
+import { RefreshCw, Sprout, LayoutDashboard, FileSearch, Globe, Ship, Sun, Moon, Mail, CloudRain } from 'lucide-react'
 
 function fmt(iso) {
   if (!iso) return 'Never'
@@ -9,9 +9,10 @@ function fmt(iso) {
 const TABS = [
   { id: 'dashboard', label: 'Dashboard',        Icon: LayoutDashboard },
   { id: 'emails',    label: 'Parity Emails',    Icon: Mail },
-  { id: 'reports',   label: 'Report Analyser',  Icon: FileSearch },
+  { id: 'reports',   label: 'Leftfield',         Icon: FileSearch },
   { id: 'conflicts', label: 'Conflict Tracker', Icon: Globe },
   { id: 'vessels',   label: 'Vessel Tracker',   Icon: Ship },
+  { id: 'weather',   label: 'Weather',          Icon: CloudRain },
 ]
 
 export default function Header({ status, onRefresh, refreshing, activeTab, onTabChange, isDark, onThemeToggle }) {

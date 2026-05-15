@@ -15,11 +15,12 @@ import threading
 
 load_dotenv()
 
-from database import Article, ArticleSentiment, MarketReport, PulseEmailReport, ProcessedEmailId, PriceEntry, create_tables, get_db, SessionLocal
+from database import Article, ArticleSentiment, MarketReport, PulseEmailReport, ProcessedEmailId, PriceEntry, LeftfieldReport, create_tables, get_db, SessionLocal
 from news_fetcher import fetch_all_feeds
-from analyzer import analyze_article, analyze_report, analyze_parity_email, COMMODITIES
+from analyzer import analyze_article, analyze_report, analyze_parity_email, analyze_leftfield_report, COMMODITIES
 import vessel_tracker
 import outlook_fetcher
+import weather as weather_module
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -113,6 +114,7 @@ async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler()
     scheduler.add_job(run_refresh_standalone, trigger="interval", hours=6, id="auto_refresh")
     scheduler.add_job(sync_parity_emails_job, trigger="interval", weeks=1, id="parity_email_sync")
+    scheduler.add_job(sync_leftfield_job, trigger="interval", weeks=1, id="leftfield_sync")
     scheduler.start()
 
     # Initial refresh on startup (non-blocking)
@@ -649,6 +651,130 @@ def delete_parity_email(
     db.delete(row)
     db.commit()
     return {"ok": True}
+
+
+# ── Leftfield Research Reports ───────────────────────────────────────────────
+
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Try multiple PDF engines in order of preference."""
+    text = ""
+    try:
+        import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        text = "\n".join(page.get_text() for page in doc)
+    except Exception:
+        pass
+    if not text.strip():
+        try:
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        except Exception:
+            pass
+    if not text.strip():
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        except Exception:
+            pass
+    return text
+
+
+def sync_leftfield_job():
+    """Fetch and analyse new research report PDFs from leftfield@leftfieldcr.com."""
+    db = SessionLocal()
+    try:
+        seen_ids = {r.message_id for r in db.query(ProcessedEmailId).filter(
+            ProcessedEmailId.message_id.like("leftfield:%")
+        ).all()}
+        emails = outlook_fetcher.fetch_leftfield_emails(already_seen_ids=seen_ids)
+        logger.info(f"Leftfield sync: {len(emails)} new report(s) found")
+        for em in emails:
+            pdf_text = _extract_pdf_text(em["attachment_bytes"])
+            if not pdf_text.strip():
+                logger.warning(f"No text extracted from {em['attachment_name']} — skipping")
+                continue
+            result = analyze_leftfield_report(
+                text=pdf_text,
+                subject=em.get("subject", ""),
+                received_date=em["received"][:10] if em.get("received") else "",
+            )
+            report_date = result.get("report_date") or (em["received"][:10] if em.get("received") else "")
+            row = LeftfieldReport(
+                filename=em["attachment_name"],
+                email_subject=em.get("subject", ""),
+                report_date=report_date,
+                data_json=json.dumps({k: v for k, v in result.items() if k != "report_date"}),
+            )
+            db.add(row)
+            db.add(ProcessedEmailId(message_id=em["id"]))
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Leftfield sync error: {e}")
+    finally:
+        db.close()
+
+
+@app.get("/api/leftfield-reports")
+def get_leftfield_reports(db: Session = Depends(get_db)):
+    rows = db.query(LeftfieldReport).order_by(LeftfieldReport.report_date.desc(), LeftfieldReport.synced_at.desc()).all()
+    return [
+        {
+            "id": r.id,
+            "filename": r.filename,
+            "email_subject": r.email_subject,
+            "report_date": r.report_date,
+            "synced_at": r.synced_at.isoformat(),
+            **json.loads(r.data_json),
+        }
+        for r in rows
+    ]
+
+
+@app.post("/api/leftfield/sync")
+def leftfield_sync_now(x_admin_password: Optional[str] = Header(None)):
+    _check_admin(x_admin_password)
+    if not outlook_fetcher.is_authenticated():
+        raise HTTPException(status_code=400, detail="Outlook not authenticated.")
+    t = threading.Thread(target=sync_leftfield_job, daemon=True)
+    t.start()
+    return {"message": "Sync started"}
+
+
+@app.delete("/api/leftfield-reports/{report_id}")
+def delete_leftfield_report(
+    report_id: int,
+    x_admin_password: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    _check_admin(x_admin_password)
+    row = db.query(LeftfieldReport).filter(LeftfieldReport.id == report_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+# ── Weather ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/weather")
+def get_weather():
+    """Live agricultural weather for all tracked regions (cached 3h)."""
+    try:
+        return weather_module.fetch_all_weather()
+    except Exception as e:
+        logger.error(f"Weather endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/weather/refresh")
+def refresh_weather():
+    """Force-clear the weather cache so the next GET re-fetches."""
+    weather_module._cache.clear()
+    return {"message": "Cache cleared"}
 
 
 # ── Price tracking ────────────────────────────────────────────────────────────
